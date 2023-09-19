@@ -18,7 +18,7 @@ import { parsers as babelParsers } from 'prettier/plugins/babel';
  * @param b - Second element to compare.
  * @returns A number indicating which element should come first.
  */
-function lexicalSort(a: string, b: string) {
+function lexicalSort(_ast: Expression, a: string, b: string) {
   return a > b ? 1 : -1;
 }
 
@@ -35,7 +35,7 @@ const integerPrefixRegex = /^(\d+)/u;
  * @param b - Second element to compare.
  * @returns A number indicating which element should come first.
  */
-function numericSort(a: string, b: string) {
+function numericSort(_ast: Expression, a: string, b: string) {
   const aPrefixResult = a.match(integerPrefixRegex);
   const bPrefixResult = b.match(integerPrefixRegex);
   if (aPrefixResult !== null && bPrefixResult !== null) {
@@ -62,9 +62,9 @@ function numericSort(a: string, b: string) {
  * @param sortFunction - The sort function to reverse.
  * @returns A reversed sort function.
  */
-function reverseSort(sortFunction: (a: string, b: string) => number) {
-  return (a: string, b: string) => {
-    return -1 * sortFunction(a, b);
+function reverseSort(sortFunction: (ast: Expression, a: string, b: string) => number) {
+  return (ast: Expression, a: string, b: string) => {
+    return -1 * sortFunction(ast, a, b);
   };
 }
 
@@ -76,9 +76,9 @@ function reverseSort(sortFunction: (a: string, b: string) => number) {
  * @param sortFunction - The sort function to make case-insensitive.
  * @returns A case-insensitive sort function.
  */
-function caseInsensitiveSort(sortFunction: (a: string, b: string) => number) {
-  return (a: string, b: string) => {
-    return sortFunction(a.toLowerCase(), b.toLowerCase());
+function caseInsensitiveSort(sortFunction: (ast: Expression, a: string, b: string) => number) {
+  return (ast: Expression, a: string, b: string) => {
+    return sortFunction(ast, a.toLowerCase(), b.toLowerCase());
   };
 }
 
@@ -90,7 +90,7 @@ function caseInsensitiveSort(sortFunction: (a: string, b: string) => number) {
  * @param _b - Second element to compare.
  * @returns A number indicating which element should come first.
  */
-function noneSort(_a: string, _b: string) {
+function noneSort(_ast: Expression, _a: string, _b: string) {
   return 0;
 }
 
@@ -106,6 +106,7 @@ enum CategorySort {
   Numeric = 'numeric',
   ReverseLexical = 'reverseLexical',
   ReverseNumeric = 'reverseNumeric',
+  Custom = 'custom',
   None = 'none',
 }
 
@@ -125,6 +126,7 @@ const categorySortFunctions = {
   [CategorySort.Numeric]: numericSort,
   [CategorySort.ReverseLexical]: reverseSort(lexicalSort),
   [CategorySort.ReverseNumeric]: reverseSort(numericSort),
+  [CategorySort.Custom]: null, /* dynamically assigned */
   [CategorySort.None]: noneSort,
 };
 
@@ -144,7 +146,7 @@ const allowedCategorySortValues = [null, ...Object.keys(categorySortFunctions)];
 function sortAst(
   ast: Expression,
   recursive: boolean,
-  sortCompareFunction: (a: string, b: string) => number,
+  sortCompareFunction: (ast: Expression, a: string, b: string) => number,
 ): Expression {
   if (ast.type === 'ArrayExpression' && recursive) {
     ast.elements = ast.elements.map(
@@ -160,6 +162,7 @@ function sortAst(
     ast.properties = (ast.properties as ObjectProperty[]).sort(
       (propertyA: ObjectProperty, propertyB: ObjectProperty) => {
         return sortCompareFunction(
+          ast,
           (propertyA.key as StringLiteral).value,
           (propertyB.key as StringLiteral).value,
         );
@@ -198,7 +201,7 @@ export const parsers = {
       // This ast variable is the real document root
       const ast = jsonRootAst.node;
 
-      const { jsonRecursiveSort, jsonSortOrder } = options;
+      const { jsonRecursiveSort, jsonSortOrder, jsonSortAlgorithmFile } = options;
 
       // Only objects are intended to be sorted by this plugin
       // Arrays are considered only in recursive mode, so that we
@@ -212,7 +215,7 @@ export const parsers = {
         return jsonRootAst;
       }
 
-      let sortCompareFunction: (a: string, b: string) => number = lexicalSort;
+      let sortCompareFunction: (ast: Expression, a: string, b: string) => number = lexicalSort;
       if (jsonSortOrder) {
         let parsedCustomSort;
         try {
@@ -260,12 +263,14 @@ export const parsers = {
 
         const sortEntries = Object.keys(customSort);
 
-        sortCompareFunction = (a: string, b: string) => {
+        const { jsonSortAlgorithmFunction } = await import(jsonSortAlgorithmFile);
+
+        sortCompareFunction = (ast: Expression, a: string, b: string) => {
           const aIndex = sortEntries.findIndex(evaluateSortEntry.bind(null, a));
           const bIndex = sortEntries.findIndex(evaluateSortEntry.bind(null, b));
 
           if (aIndex === -1 && bIndex === -1) {
-            return lexicalSort(a, b);
+            return lexicalSort(ast, a, b);
           } else if (bIndex === -1) {
             return -1;
           } else if (aIndex === -1) {
@@ -281,7 +286,10 @@ export const parsers = {
               categorySort === null
                 ? lexicalSort
                 : categorySortFunctions[categorySort];
-            return categorySortFunction(a, b);
+            if (categorySortFunction == null) {
+              return jsonSortAlgorithmFunction(ast, a, b);
+            }
+            return categorySortFunction(ast, a, b);
           }
           return aIndex - bIndex;
         };
@@ -310,4 +318,10 @@ export const options = {
     since: '0.0.4',
     type: 'string' as const,
   },
+  jsonSortAlgorithmFile: {
+    category: 'json-sort',
+    description: 'placeholder',
+    since: '3.1.0',
+    type: 'string' as const
+  }
 };

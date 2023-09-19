@@ -10,7 +10,7 @@
 !.yarn/versions
 
 # Build files
-*.js
+# *.js
 *.d.ts
 *.map
 *.tgz
